@@ -3878,3 +3878,94 @@ def clean_transient_models(cr):
                 cr.execute(query)
         except Exception as e:
             logger.warning("Failed to clean transient table %s\n%s", table_name, str(e))
+
+
+def strip_view_arch_attrs(cr, view_type, attr_patterns, like_hints=None):
+    """Strip attribute occurrences from ir_ui_view.arch_db rows.
+
+    Each successive Odoo release tightens its RelaxNG schemas; some
+    attributes valid in version N are rejected in version N+1. Stored
+    arch_db blobs that carry these attributes fail validation when the
+    module is upgraded, leaving the view unrenderable and breaking
+    downstream xml_id lookups.
+
+    Use this in a pre-migration script (typically `base/<ver>/`) to
+    strip the offending occurrences before any module update fires
+    `_check_xml`. Module updates that follow regenerate the blobs from
+    clean source XML, so this is a no-op for views already on the new
+    idioms; only legacy stored arch is cleaned.
+
+    Since Odoo 17.0 `ir_ui_view.arch_db` is a multi-lang jsonb object
+    (`{"en_US": "<view>...", "fr_FR": "...", ...}`); the helper handles
+    that shape, iterating per language key via `jsonb_each` and
+    rebuilding the object with `jsonb_object_agg`.
+
+    :param cr: database cursor.
+    :param view_type: which `ir_ui_view.type` to scope to. **Strict
+        type-scope is intentional**: RNG removals are type-specific.
+        Broader stripping risks bricking valid attrs on other types
+        (e.g. ``<list expand=...>`` is valid in 19.0 even though
+        ``<group expand=...>`` was removed).
+    :param attr_patterns: iterable of `(element_regex, attr_regex)`
+        POSIX regex pairs. ``element_regex`` matches the element name
+        (e.g. ``'group'`` or ``'(?:group|field)'``); ``attr_regex``
+        matches the attribute literal including its value
+        (e.g. ``'expand="[^"]*"'`` or ``'string="Group By"'``).
+        The helper strips ``<{element_regex}[^>]*?\\s+{attr_regex}``
+        occurrences, preserving the rest of the element tag.
+    :param like_hints: optional iterable of substring hints used to
+        skip views that clearly carry none of the patterns
+        (cheap pre-filter). Defaults to the attribute names parsed
+        from each ``attr_regex`` before the first ``=``.
+
+    Example (19.0 migration of search-view RNG removals)::
+
+        strip_view_arch_attrs(env.cr, "search", [
+            ("(?:group|field)", 'expand="[^"]*"'),
+            ("group", 'string="Group By"'),
+        ])
+
+    Each pattern runs as a separate `regexp_replace` pass nested
+    inside one UPDATE; the helper does not attempt to combine into a
+    single alternation. Performance: sub-second on a Tier-1 600-module
+    Odoo seed (~500 search views, 3 languages each).
+    """
+    if version_info and version_info[0] < 17:
+        raise Exception(
+            "strip_view_arch_attrs requires Odoo 17.0+ (jsonb arch_db). "
+            "For earlier versions write a direct regexp_replace on "
+            "arch_db::text."
+        )
+    if not attr_patterns:
+        return
+    if like_hints is None:
+        # Default to a tight substring including the '=' so a generic
+        # attribute name (e.g. 'string') doesn't match every view.
+        # Callers with truly distinct attrs (e.g. 'string="Group By"')
+        # should pass an explicit literal hint for best filtering.
+        like_hints = [attr.split('"', 1)[0] for _, attr in attr_patterns]
+    # Build the nested regexp_replace: each pattern wraps the previous.
+    inner = "content"
+    for element_regex, attr_regex in attr_patterns:
+        inner = (
+            "regexp_replace({inner}, "
+            "'(<{elem}[^>]*?)\\s+{attr}', '\\1', 'g')"
+        ).format(inner=inner, elem=element_regex, attr=attr_regex)
+    like_clause = " OR ".join(
+        "arch_db::text LIKE '%%{}%%'".format(h) for h in like_hints
+    )
+    query = (
+        "UPDATE ir_ui_view v "
+        "SET arch_db = sub.new_arch "
+        "FROM ("
+        " SELECT id, jsonb_object_agg(lang, to_jsonb({inner})) AS new_arch"
+        " FROM ("
+        "   SELECT v2.id, je.key AS lang, je.value #>> '{{}}' AS content"
+        "   FROM ir_ui_view v2, jsonb_each(v2.arch_db) je"
+        "   WHERE v2.type = %s AND ({like})"
+        " ) flat"
+        " GROUP BY id"
+        ") sub "
+        "WHERE v.id = sub.id"
+    ).format(inner=inner, like=like_clause)
+    logged_query(cr, query, (view_type,))
