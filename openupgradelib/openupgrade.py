@@ -2075,7 +2075,13 @@ def get_field2column_type(field_type, translatable=False):
 
 
 def get_many2one_references(cr):
-    if version_info[0] > 19:
+    # ir_model_fields.relation_model_field is new in 20.0, but a pre-migration
+    # script runs against the schema of the version being migrated *from*. Key
+    # off the column rather than the running version, or every 19->20 pre
+    # script that renames a model or a field dies on an UndefinedColumn.
+    if version_info[0] > 19 and column_exists(
+        cr, "ir_model_fields", "relation_model_field"
+    ):
         cr.execute(
             """
             SELECT sub.model, sub.name, sub.relation_model_field, split_part(imf.related, '.', 1)
