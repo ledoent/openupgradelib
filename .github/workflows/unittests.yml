@@ -9,6 +9,7 @@ on:
 jobs:
   unittests:
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -21,7 +22,9 @@ jobs:
           -  image_name: py3.10-odoo17.0
           -  image_name: py3.10-odoo18.0
           -  image_name: py3.10-odoo19.0
+          # 20.0 is not supported yet; run it for signal without gating the workflow
           -  image_name: py3.12-odoo20.0
+             experimental: true
           -  image_name: py3.9-ocb15.0
           -  image_name: py3.9-odoo15.0
 # TODO: <=v14 needs more work on how to create the environment in test class
