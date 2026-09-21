@@ -398,17 +398,21 @@ def load_data(
 
     fp = _file_open(module_name, filename)
 
+    # 20.0 stopped re-exporting the converters from odoo.tools; they have always
+    # lived in odoo.tools.convert, so take them from there on every version.
+    convert = getattr(tools, "convert", tools)
+
     try:
         if ext == ".csv":
             noupdate = True
-            tools.convert_csv_import(
+            convert.convert_csv_import(
                 env_or_cr, module_name, pathname, fp.read(), idref, mode, noupdate
             )
         elif ext == ".yml":
             yaml_import(cr, module_name, fp, None, idref=idref, mode=mode)
         elif mode == "init_no_create":
             for fp2 in _get_existing_records(cr, fp, module_name):
-                tools.convert_xml_import(
+                convert.convert_xml_import(
                     env_or_cr,
                     module_name,
                     fp2,
@@ -416,7 +420,7 @@ def load_data(
                     mode="init",
                 )
         else:
-            tools.convert_xml_import(
+            convert.convert_xml_import(
                 env_or_cr,
                 module_name,
                 fp
