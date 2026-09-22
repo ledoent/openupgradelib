@@ -9,6 +9,7 @@ on:
 jobs:
   unittests:
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +22,13 @@ jobs:
           -  image_name: py3.10-odoo17.0
           -  image_name: py3.10-odoo18.0
           -  image_name: py3.10-odoo19.0
+          # 20.0 is not supported yet; run it for signal without gating the workflow.
+          # It needs a newer Postgres than the rest: 12 still reserves NOWAIT, and
+          # 20.0's ir.module.module writes "SELECT pg_advisory_xact_lock_shared(...)
+          # NOWAIT", which only parses where NOWAIT is unreserved.
+          -  image_name: py3.12-odoo20.0
+             experimental: true
+             postgres_version: "16"
           -  image_name: py3.9-ocb15.0
           -  image_name: py3.9-odoo15.0
 # TODO: <=v14 needs more work on how to create the environment in test class
@@ -38,7 +46,7 @@ jobs:
 #          -  image_name: py3.6-odoo14.0
     services:
       postgres:
-        image: postgres:12
+        image: postgres:${{ matrix.postgres_version || '12' }}
         env:
           POSTGRES_USER: odoo
           POSTGRES_PASSWORD: odoo

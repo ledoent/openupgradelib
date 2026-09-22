@@ -398,17 +398,21 @@ def load_data(
 
     fp = _file_open(module_name, filename)
 
+    # 20.0 stopped re-exporting the converters from odoo.tools; they have always
+    # lived in odoo.tools.convert, so take them from there on every version.
+    convert = getattr(tools, "convert", tools)
+
     try:
         if ext == ".csv":
             noupdate = True
-            tools.convert_csv_import(
+            convert.convert_csv_import(
                 env_or_cr, module_name, pathname, fp.read(), idref, mode, noupdate
             )
         elif ext == ".yml":
             yaml_import(cr, module_name, fp, None, idref=idref, mode=mode)
         elif mode == "init_no_create":
             for fp2 in _get_existing_records(cr, fp, module_name):
-                tools.convert_xml_import(
+                convert.convert_xml_import(
                     env_or_cr,
                     module_name,
                     fp2,
@@ -416,7 +420,7 @@ def load_data(
                     mode="init",
                 )
         else:
-            tools.convert_xml_import(
+            convert.convert_xml_import(
                 env_or_cr,
                 module_name,
                 fp
@@ -2075,10 +2079,17 @@ def get_field2column_type(field_type, translatable=False):
 
 
 def get_many2one_references(cr):
-    if version_info[0] > 19:
+    # ir_model_fields.relation_model_field is new in 20.0, but a pre-migration
+    # script runs against the schema of the version being migrated *from*. Key
+    # off the column rather than the running version, or every 19->20 pre
+    # script that renames a model or a field dies on an UndefinedColumn.
+    if version_info[0] > 19 and column_exists(
+        cr, "ir_model_fields", "relation_model_field"
+    ):
         cr.execute(
             """
-            SELECT sub.model, sub.name, sub.relation_model_field, split_part(imf.related, '.', 1)
+            SELECT sub.model, sub.name, sub.relation_model_field,
+                   coalesce(split_part(imf.related, '.', 1), '')
             FROM ir_model_fields imf
             JOIN (
                 SELECT model, name, relation_model_field
@@ -3716,9 +3727,12 @@ def chunked(records, single=True):
     """Memory and performance friendly method to iterate over a potentially
     large number of records. Yields either a whole chunk or a single record
     at the time. Don't nest calls to this method."""
-    # PREFETCH_MAX lives in models in <v19, and tools.constants afterwards
+    # PREFETCH_MAX lives in models in <v19 and in tools.constants in 19.0; 20.0
+    # drops it altogether, so fall back to the value it always held.
     size = (
-        getattr(core.models, "PREFETCH_MAX", None) or core.tools.constants.PREFETCH_MAX
+        getattr(core.models, "PREFETCH_MAX", None)
+        or getattr(core.tools.constants, "PREFETCH_MAX", None)
+        or 1000
     )
     model = records._name
     ids = records.with_context(prefetch_fields=False).ids
