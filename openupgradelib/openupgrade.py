@@ -2088,7 +2088,8 @@ def get_many2one_references(cr):
     ):
         cr.execute(
             """
-            SELECT sub.model, sub.name, sub.relation_model_field, split_part(imf.related, '.', 1)
+            SELECT sub.model, sub.name, sub.relation_model_field,
+                   coalesce(split_part(imf.related, '.', 1), '')
             FROM ir_model_fields imf
             JOIN (
                 SELECT model, name, relation_model_field
